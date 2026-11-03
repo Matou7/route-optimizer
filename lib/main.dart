@@ -52,7 +52,7 @@ class NavigationScreen extends StatefulWidget {
 
 class _NavigationScreenState extends State<NavigationScreen> {
   final search = TextEditingController();
-  MaplibreMapController? map;
+  MapLibreMapController? map;
   Timer? debounce;
   Position? position;
   Place? destination;
@@ -206,7 +206,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
     final route = routes.isEmpty ? null : routes[selected];
     return Scaffold(
       body: Stack(children: [
-        MaplibreMap(
+        MapLibreMap(
           styleString: mapStyle,
           initialCameraPosition: const CameraPosition(target: LatLng(47.2184, -1.5536), zoom: 11.5),
           myLocationEnabled: position != null,
@@ -221,7 +221,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
             padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
             child: Row(children: [
               Container(width: 42, height: 42,
-                decoration: BoxDecoration(color: bg.withOpacity(.94), borderRadius: BorderRadius.circular(13), border: Border.all(color: lime.withOpacity(.45))),
+                decoration: BoxDecoration(color: bg.withValues(alpha: .94), borderRadius: BorderRadius.circular(13), border: Border.all(color: lime.withValues(alpha: .45))),
                 child: const Icon(Icons.alt_route, color: lime)),
               const SizedBox(width: 10),
               const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -235,7 +235,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Column(children: [
               Container(
-                decoration: BoxDecoration(color: surface.withOpacity(.97), borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.white.withOpacity(.08))),
+                decoration: BoxDecoration(color: surface.withValues(alpha: .97), borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.white.withValues(alpha: .08))),
                 child: TextField(
                   controller: search,
                   onChanged: onSearchChanged,
@@ -282,7 +282,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
           Container(
             width: double.infinity,
             padding: const EdgeInsets.fromLTRB(18, 15, 18, 22),
-            decoration: BoxDecoration(color: bg.withOpacity(.98), borderRadius: const BorderRadius.vertical(top: Radius.circular(24)), border: Border.all(color: Colors.white.withOpacity(.08))),
+            decoration: BoxDecoration(color: bg.withValues(alpha: .98), borderRadius: const BorderRadius.vertical(top: Radius.circular(24)), border: Border.all(color: Colors.white.withValues(alpha: .08))),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
               Row(children: [
                 Container(width: 6, height: 6, decoration: const BoxDecoration(color: lime, shape: BoxShape.circle)),
@@ -354,7 +354,7 @@ class _GpsBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-    decoration: BoxDecoration(color: surface, borderRadius: BorderRadius.circular(30), border: Border.all(color: active ? lime.withOpacity(.5) : Colors.white12)),
+    decoration: BoxDecoration(color: surface, borderRadius: BorderRadius.circular(30), border: Border.all(color: active ? lime.withValues(alpha: .5) : Colors.white12)),
     child: Row(children: [
       Container(width: 6, height: 6, decoration: BoxDecoration(color: active ? lime : muted, shape: BoxShape.circle)),
       const SizedBox(width: 6),
