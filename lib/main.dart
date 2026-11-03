@@ -54,6 +54,11 @@ class _NavigationScreenState extends State<NavigationScreen> {
   final search = TextEditingController();
   MapLibreMapController? map;
   Timer? debounce;
+  StreamSubscription<Position>? gpsSubscription;
+  DateTime? lastDeviationPrompt;
+  double progressMetres = 0;
+  bool avoidTolls = false;
+  double maxDetourKm = 15;
   Position? position;
   Place? destination;
   List<Place> suggestions = [];
@@ -65,6 +70,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
   @override
   void dispose() {
     debounce?.cancel();
+    gpsSubscription?.cancel();
     search.dispose();
     super.dispose();
   }
@@ -132,7 +138,71 @@ class _NavigationScreenState extends State<NavigationScreen> {
     }
   }
 
+
+  Future<void> startNavigation() async {
+    if (routes.isEmpty || destination == null) return;
+    setState(() { navigating = true; status = 'NAVIGATION ACTIVE — GPS EN COURS'; });
+    await gpsSubscription?.cancel();
+    gpsSubscription = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(accuracy: LocationAccuracy.bestForNavigation, distanceFilter: 8),
+    ).listen((p) async {
+      if (!mounted || !navigating || routes.isEmpty) return;
+      final route = routes[selected];
+      var nearest = double.infinity;
+      var nearestIndex = 0;
+      for (var i = 0; i < route.points.length; i++) {
+        final point = route.points[i];
+        final metres = Geolocator.distanceBetween(p.latitude, p.longitude, point.latitude, point.longitude);
+        if (metres < nearest) { nearest = metres; nearestIndex = i; }
+      }
+      var remaining = 0.0;
+      for (var i = nearestIndex; i < route.points.length - 1; i++) {
+        final a = route.points[i], b = route.points[i + 1];
+        remaining += Geolocator.distanceBetween(a.latitude, a.longitude, b.latitude, b.longitude);
+      }
+      if (!mounted) return;
+      setState(() {
+        position = p;
+        progressMetres = (route.metres - remaining).clamp(0, route.metres);
+        status = nearest > 80
+          ? 'ÉCART D’ITINÉRAIRE — ' + nearest.round().toString() + ' M'
+          : 'NAVIGATION ACTIVE · ' + distance(progressMetres) + ' PARCOURUS';
+      });
+      if (nearest > 80) {
+        final now = DateTime.now();
+        if (lastDeviationPrompt == null || now.difference(lastDeviationPrompt!) > const Duration(seconds: 45)) {
+          lastDeviationPrompt = now;
+          if (mounted) {
+            final recalc = await showDialog<bool>(
+              context: context,
+              builder: (context) => AlertDialog(
+                backgroundColor: surface,
+                title: const Text('Écart détecté'),
+                content: Text('Tu sembles être à ' + nearest.round().toString() + ' m du tracé. Veux-tu recalculer depuis ta position actuelle ?'),
+                actions: [
+                  TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('GARDER LE TRACÉ')),
+                  ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('RECALCULER')),
+                ],
+              ),
+            );
+            if (recalc == true && mounted && destination != null) {
+              setState(() { position = p; navigating = false; });
+              await buildRoute(destination!);
+              if (mounted) await startNavigation();
+            }
+          }
+        }
+      } else {
+        await map?.animateCamera(CameraUpdate.newLatLngZoom(LatLng(p.latitude, p.longitude), 16));
+      }
+    }, onError: (Object error) {
+      if (mounted) setState(() => status = 'SIGNAL GPS INSTABLE');
+    });
+  }
+
   Future<void> buildRoute(Place place) async {
+    await gpsSubscription?.cancel();
+    navigating = false;
     if (position == null) await locate(center: false);
     final current = position;
     if (current == null) {
@@ -162,8 +232,16 @@ class _NavigationScreenState extends State<NavigationScreen> {
         final points = coords.map((c) => LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble())).toList();
         return RouteChoice(points, (r['distance'] as num).toDouble(), (r['duration'] as num).toDouble());
       }).toList();
+      found.sort((a, b) => a.seconds.compareTo(b.seconds));
+      final fastest = found.isEmpty ? 0.0 : found.first.metres;
+      final filtered = found.where((r) => r.metres <= fastest + maxDetourKm * 1000).toList();
       if (!mounted) return;
-      setState(() { routes = found; selected = 0; status = found.length.toString() + ' OPTION(S) DISPONIBLE(S)'; });
+      setState(() {
+        routes = filtered.isEmpty ? found : filtered;
+        selected = 0;
+        progressMetres = 0;
+        status = routes.length.toString() + ' OPTION(S) · DÉTOUR MAX ' + maxDetourKm.toStringAsFixed(0) + ' KM';
+      });
       await drawRoute();
       await map?.animateCamera(CameraUpdate.newLatLngBounds(
         LatLngBounds(
@@ -328,15 +406,56 @@ class _NavigationScreenState extends State<NavigationScreen> {
                     ),
                   )),
                 ],
+                if (navigating) ...[
+                  const SizedBox(height: 10),
+                  Row(children: [
+                    const Text('PROGRESSION', style: TextStyle(color: muted, fontSize: 9, letterSpacing: 1)),
+                    const Spacer(),
+                    Text(distance(progressMetres) + ' / ' + distance(route.metres), style: const TextStyle(color: lime, fontSize: 11, fontWeight: FontWeight.w800)),
+                  ]),
+                  const SizedBox(height: 5),
+                  LinearProgressIndicator(value: route.metres <= 0 ? 0 : (progressMetres / route.metres).clamp(0, 1), backgroundColor: surface, color: lime, minHeight: 4),
+                ],
                 const SizedBox(height: 12),
-                SizedBox(width: double.infinity, child: ElevatedButton(
-                  onPressed: () => setState(() {
-                    navigating = !navigating;
-                    status = navigating ? 'ITINÉRAIRE EN PAUSE' : 'NAVIGATION ACTIVE — SUIVEZ LE TRACÉ';
-                  }),
-                  style: ElevatedButton.styleFrom(backgroundColor: lime, foregroundColor: bg, padding: const EdgeInsets.symmetric(vertical: 15)),
-                  child: Text(navigating ? 'METTRE EN PAUSE' : 'DÉMARRER LE TRAJET', style: const TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1)),
-                )),
+                Row(children: [
+                  Expanded(child: OutlinedButton.icon(
+                    onPressed: () => showModalBottomSheet<void>(
+                      context: context, backgroundColor: surface,
+                      builder: (context) => StatefulBuilder(builder: (context, setSheetState) => Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          const Text('PRÉFÉRENCES DU TRAJET', style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1)),
+                          const SizedBox(height: 18),
+                          Text('Détour supplémentaire maximal : ' + maxDetourKm.toStringAsFixed(0) + ' km'),
+                          Slider(value: maxDetourKm, min: 0, max: 50, divisions: 10, activeColor: lime,
+                            label: maxDetourKm.toStringAsFixed(0) + ' km',
+                            onChanged: (v) => setSheetState(() { maxDetourKm = v; }),
+                          ),
+                          SwitchListTile(
+                            contentPadding: EdgeInsets.zero, activeThumbColor: lime,
+                            title: const Text('Préférer les routes sans péage'),
+                            subtitle: const Text('Le service actuel ne fournit pas de données de péage fiables : cette préférence ne peut pas encore filtrer les trajets.'),
+                            value: avoidTolls,
+                            onChanged: (v) => setSheetState(() { avoidTolls = v; }),
+                          ),
+                          const SizedBox(height: 10),
+                          SizedBox(width: double.infinity, child: ElevatedButton(onPressed: () => Navigator.pop(context), child: const Text('APPLIQUER'))),
+                        ]),
+                      )),
+                    ),
+                    icon: const Icon(Icons.tune, size: 16), label: const Text('OPTIONS'),
+                    style: OutlinedButton.styleFrom(foregroundColor: lime, side: const BorderSide(color: lime)),
+                  )),
+                  const SizedBox(width: 8),
+                  Expanded(child: ElevatedButton(
+                    onPressed: navigating ? () async {
+                      await gpsSubscription?.cancel();
+                      if (mounted) setState(() { navigating = false; status = 'TRAJET EN PAUSE'; });
+                    } : startNavigation,
+                    style: ElevatedButton.styleFrom(backgroundColor: lime, foregroundColor: bg, padding: const EdgeInsets.symmetric(vertical: 15)),
+                    child: Text(navigating ? 'PAUSE' : 'DÉMARRER', style: const TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1)),
+                  )),
+                ]),
               ],
               const SizedBox(height: 9),
               const Text('CARTOGRAPHIE © OPENSTREETMAP · SERVICES DE DÉMONSTRATION', style: TextStyle(color: Color(0xFF657080), fontSize: 8, letterSpacing: .6)),
