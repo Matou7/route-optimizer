@@ -442,7 +442,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
             ]),
           ),
           const Spacer(),
-          Align(alignment: Alignment.centerRight, child: Padding(
+          if (!navigating) Align(alignment: Alignment.centerRight, child: Padding(
             padding: const EdgeInsets.only(right: 16, bottom: 12),
             child: FloatingActionButton.small(
               heroTag: 'gps', backgroundColor: surface, onPressed: () => locate(),
@@ -536,9 +536,9 @@ class _NavigationScreenState extends State<NavigationScreen> {
                   const SizedBox(height: 5),
                   LinearProgressIndicator(value: route.metres <= 0 ? 0 : (progressMetres / route.metres).clamp(0, 1), backgroundColor: surface, color: lime, minHeight: 4),
                 ],
-                if (!navigating) const SizedBox(height: 12),
-                if (!navigating) Row(children: [
-                  Expanded(child: OutlinedButton.icon(
+                const SizedBox(height: 12),
+                Row(children: [
+                  if (!navigating) Expanded(child: OutlinedButton.icon(
                     onPressed: () => showModalBottomSheet<void>(
                       context: context, backgroundColor: surface,
                       builder: (context) => StatefulBuilder(builder: (context, setSheetState) => Padding(
@@ -566,7 +566,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
                     icon: const Icon(Icons.tune, size: 16), label: const Text('OPTIONS'),
                     style: OutlinedButton.styleFrom(foregroundColor: lime, side: const BorderSide(color: lime)),
                   )),
-                  const SizedBox(width: 8),
+                  if (!navigating) const SizedBox(width: 8),
                   Expanded(child: ElevatedButton(
                     onPressed: navigating ? () async {
                       await gpsSubscription?.cancel();
