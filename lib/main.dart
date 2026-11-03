@@ -366,6 +366,13 @@ class _NavigationScreenState extends State<NavigationScreen> {
     return mins >= 60 ? (mins ~/ 60).toString() + ' h ' + (mins % 60).toString() + ' min' : mins.toString() + ' min';
   }
 
+  String arrivalTime(double remainingSeconds) {
+    final arrival = DateTime.now().add(Duration(seconds: remainingSeconds.round()));
+    final hour = arrival.hour.toString().padLeft(2, '0');
+    final minute = arrival.minute.toString().padLeft(2, '0');
+    return '$hour:$minute';
+  }
+
   @override
   Widget build(BuildContext context) {
     final route = routes.isEmpty ? null : routes[selected];
@@ -382,7 +389,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
           onStyleLoadedCallback: () { if (routes.isNotEmpty) drawRoute(); },
         ),
         SafeArea(child: Column(children: [
-          Padding(
+          if (!navigating) Padding(
             padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
             child: Row(children: [
               Container(width: 42, height: 42,
@@ -396,7 +403,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
               _GpsBadge(active: position != null),
             ]),
           ),
-          Padding(
+          if (!navigating) Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Column(children: [
               Container(
@@ -471,13 +478,23 @@ class _NavigationScreenState extends State<NavigationScreen> {
                 Text(destination?.name ?? 'Destination', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
                 const SizedBox(height: 13),
                 Row(children: [
-                  _Metric(value: distance(route.metres), label: 'DISTANCE'),
+                  _Metric(
+                    value: distance(navigating
+                      ? (route.metres - progressMetres).clamp(0, route.metres)
+                      : route.metres),
+                    label: navigating ? 'RESTANTE' : 'DISTANCE',
+                  ),
                   const SizedBox(width: 28),
-                  _Metric(value: duration(route.seconds), label: 'DURÉE ESTIMÉE'),
+                  _Metric(
+                    value: navigating
+                      ? arrivalTime((route.seconds * ((route.metres <= 0 ? 0 : (route.metres - progressMetres).clamp(0, route.metres) / route.metres))).clamp(0, route.seconds))
+                      : duration(route.seconds),
+                    label: navigating ? 'ARRIVÉE ESTIMÉE' : 'DURÉE ESTIMÉE',
+                  ),
                   const Spacer(),
                   Text((selected + 1).toString() + '/' + routes.length.toString(), style: const TextStyle(color: lime, fontWeight: FontWeight.w800)),
                 ]),
-                if (routes.length > 1) ...[
+                if (!navigating && routes.length > 1) ...[
                   const SizedBox(height: 13),
                   SizedBox(height: 38, child: ListView.separated(
                     scrollDirection: Axis.horizontal,
@@ -519,8 +536,8 @@ class _NavigationScreenState extends State<NavigationScreen> {
                   const SizedBox(height: 5),
                   LinearProgressIndicator(value: route.metres <= 0 ? 0 : (progressMetres / route.metres).clamp(0, 1), backgroundColor: surface, color: lime, minHeight: 4),
                 ],
-                const SizedBox(height: 12),
-                Row(children: [
+                if (!navigating) const SizedBox(height: 12),
+                if (!navigating) Row(children: [
                   Expanded(child: OutlinedButton.icon(
                     onPressed: () => showModalBottomSheet<void>(
                       context: context, backgroundColor: surface,
@@ -560,8 +577,10 @@ class _NavigationScreenState extends State<NavigationScreen> {
                   )),
                 ]),
               ],
-              const SizedBox(height: 9),
-              const Text('CARTOGRAPHIE © OPENSTREETMAP · SERVICES DE DÉMONSTRATION', style: TextStyle(color: Color(0xFF657080), fontSize: 8, letterSpacing: .6)),
+              if (!navigating) ...[
+                const SizedBox(height: 9),
+                const Text('CARTOGRAPHIE © OPENSTREETMAP · SERVICES DE DÉMONSTRATION', style: TextStyle(color: Color(0xFF657080), fontSize: 8, letterSpacing: .6)),
+              ],
             ]),
           ),
         ])),
