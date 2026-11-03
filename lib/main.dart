@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:flutter_compass/flutter_compass.dart';
 import 'package:http/http.dart' as http;
 import 'package:maplibre_gl/maplibre_gl.dart';
 
@@ -37,11 +38,18 @@ class Place {
   const Place(this.name, this.lat, this.lon);
 }
 
+class RouteStep {
+  final String instruction;
+  final double metres;
+  const RouteStep(this.instruction, this.metres);
+}
+
 class RouteChoice {
   final List<LatLng> points;
   final double metres;
   final double seconds;
-  const RouteChoice(this.points, this.metres, this.seconds);
+  final List<RouteStep> steps;
+  const RouteChoice(this.points, this.metres, this.seconds, this.steps);
 }
 
 class NavigationScreen extends StatefulWidget {
@@ -55,6 +63,8 @@ class _NavigationScreenState extends State<NavigationScreen> {
   MapLibreMapController? map;
   Timer? debounce;
   StreamSubscription<Position>? gpsSubscription;
+  StreamSubscription<CompassEvent>? compassSubscription;
+  double mapBearing = 0;
   DateTime? lastDeviationPrompt;
   double progressMetres = 0;
   bool avoidTolls = false;
@@ -68,8 +78,29 @@ class _NavigationScreenState extends State<NavigationScreen> {
   String status = 'PRÊT À EXPLORER';
 
   @override
+  void initState() {
+    super.initState();
+    compassSubscription = FlutterCompass.events?.listen((event) {
+      final heading = event.heading;
+      if (heading == null || !heading.isFinite || !mounted) return;
+      // À l'arrêt, la boussole donne l'orientation du téléphone.
+      if ((position?.speed ?? 0) < 1.5) {
+        mapBearing = (heading + 360) % 360;
+        if (navigating && position != null) {
+          map?.animateCamera(CameraUpdate.newCameraPosition(CameraPosition(
+            target: LatLng(position!.latitude, position!.longitude),
+            zoom: 16,
+            bearing: mapBearing,
+          )));
+        }
+      }
+    });
+  }
+
+  @override
   void dispose() {
     debounce?.cancel();
+    compassSubscription?.cancel();
     gpsSubscription?.cancel();
     search.dispose();
     super.dispose();
@@ -163,6 +194,9 @@ class _NavigationScreenState extends State<NavigationScreen> {
       if (!mounted) return;
       setState(() {
         position = p;
+        if (p.speed >= 1.5 && p.heading.isFinite && p.heading >= 0) {
+          mapBearing = (p.heading + 360) % 360;
+        }
         progressMetres = (route.metres - remaining).clamp(0, route.metres);
         status = nearest > 80
           ? 'ÉCART D’ITINÉRAIRE — ' + nearest.round().toString() + ' M'
@@ -193,7 +227,12 @@ class _NavigationScreenState extends State<NavigationScreen> {
           }
         }
       } else {
-        await map?.animateCamera(CameraUpdate.newLatLngZoom(LatLng(p.latitude, p.longitude), 16));
+        await map?.animateCamera(CameraUpdate.newCameraPosition(CameraPosition(
+          target: LatLng(p.latitude, p.longitude),
+          zoom: 16,
+          bearing: mapBearing,
+          tilt: 45,
+        )));
       }
     }, onError: (Object error) {
       if (mounted) setState(() => status = 'SIGNAL GPS INSTABLE');
@@ -221,7 +260,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
         current.longitude.toString() + ',' + current.latitude.toString() + ';' +
         place.lon.toString() + ',' + place.lat.toString();
       final uri = Uri.https('router.project-osrm.org', path, {
-        'overview': 'full', 'geometries': 'geojson', 'alternatives': 'true', 'steps': 'false'
+        'overview': 'full', 'geometries': 'geojson', 'alternatives': 'true', 'steps': 'true'
       });
       final response = await http.get(uri, headers: {'User-Agent': 'RouteOptimizer/0.1'});
       if (response.statusCode != 200) throw Exception('Moteur de calcul indisponible.');
@@ -230,7 +269,20 @@ class _NavigationScreenState extends State<NavigationScreen> {
       final found = (data['routes'] as List).map((r) {
         final coords = r['geometry']['coordinates'] as List;
         final points = coords.map((c) => LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble())).toList();
-        return RouteChoice(points, (r['distance'] as num).toDouble(), (r['duration'] as num).toDouble());
+        final legs = r['legs'] as List? ?? [];
+        final stepList = <RouteStep>[];
+        for (final leg in legs) {
+          for (final step in (leg['steps'] as List? ?? [])) {
+            final maneuver = step['maneuver'] as Map<String, dynamic>? ?? {};
+            final type = (maneuver['type'] ?? 'continue').toString();
+            final modifier = (maneuver['modifier'] ?? '').toString();
+            final road = (step['name'] ?? '').toString();
+            final action = maneuverLabel(type, modifier);
+            final instruction = road.isEmpty ? action : action + ' sur ' + road;
+            stepList.add(RouteStep(instruction, (step['distance'] as num? ?? 0).toDouble()));
+          }
+        }
+        return RouteChoice(points, (r['distance'] as num).toDouble(), (r['duration'] as num).toDouble(), stepList);
       }).toList();
       found.sort((a, b) => a.seconds.compareTo(b.seconds));
       final fastest = found.isEmpty ? 0.0 : found.first.metres;
@@ -270,6 +322,41 @@ class _NavigationScreenState extends State<NavigationScreen> {
     ));
   }
 
+  String maneuverLabel(String type, String modifier) {
+    if (type == 'depart') return 'Démarrer';
+    if (type == 'arrive') return 'Vous êtes arrivé';
+    if (type == 'roundabout' || type == 'rotary' || type == 'roundabout turn') return 'Prendre le rond-point';
+    if (type == 'merge') return 'Rejoindre la voie';
+    if (type == 'fork') return modifier.contains('left') ? 'Rester à gauche' : modifier.contains('right') ? 'Rester à droite' : 'Suivre la voie';
+    if (type == 'turn' || type == 'end of road' || type == 'continue' || type == 'new name') {
+      if (modifier.contains('uturn')) return 'Faire demi-tour';
+      if (modifier.contains('left')) return modifier.contains('sharp') ? 'Tourner fortement à gauche' : modifier.contains('slight') ? 'Obliquer à gauche' : 'Tourner à gauche';
+      if (modifier.contains('right')) return modifier.contains('sharp') ? 'Tourner fortement à droite' : modifier.contains('slight') ? 'Obliquer à droite' : 'Tourner à droite';
+      return 'Continuer tout droit';
+    }
+    return 'Continuer';
+  }
+
+  RouteStep? get nextStep {
+    if (routes.isEmpty || routes[selected].steps.isEmpty) return null;
+    var covered = 0.0;
+    for (final step in routes[selected].steps) {
+      covered += step.metres;
+      if (covered > progressMetres + 5) return step;
+    }
+    return routes[selected].steps.last;
+  }
+
+  double get nextStepDistance {
+    if (routes.isEmpty || routes[selected].steps.isEmpty) return 0;
+    var covered = 0.0;
+    for (final step in routes[selected].steps) {
+      covered += step.metres;
+      if (covered > progressMetres + 5) return (covered - progressMetres).clamp(0, step.metres);
+    }
+    return 0;
+  }
+
   String distance(double metres) => metres >= 1000
     ? (metres / 1000).toStringAsFixed(1) + ' km'
     : metres.round().toString() + ' m';
@@ -289,7 +376,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
           initialCameraPosition: const CameraPosition(target: LatLng(47.2184, -1.5536), zoom: 11.5),
           myLocationEnabled: position != null,
           myLocationTrackingMode: MyLocationTrackingMode.none,
-          compassEnabled: false,
+          compassEnabled: true,
           attributionButtonPosition: AttributionButtonPosition.bottomLeft,
           onMapCreated: (controller) => map = controller,
           onStyleLoadedCallback: () { if (routes.isNotEmpty) drawRoute(); },
@@ -407,7 +494,23 @@ class _NavigationScreenState extends State<NavigationScreen> {
                   )),
                 ],
                 if (navigating) ...[
-                  const SizedBox(height: 10),
+                  if (nextStep != null) ...[
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(13),
+                      decoration: BoxDecoration(color: surface, borderRadius: BorderRadius.circular(14), border: Border.all(color: lime.withValues(alpha: .45))),
+                      child: Row(children: [
+                        const Icon(Icons.turn_right, color: lime, size: 28),
+                        const SizedBox(width: 12),
+                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text(distance(nextStepDistance).toUpperCase(), style: const TextStyle(color: lime, fontSize: 10, fontWeight: FontWeight.w900, letterSpacing: 1)),
+                          const SizedBox(height: 3),
+                          Text(nextStep!.instruction, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
+                        ])),
+                      ]),
+                    ),
+                    const SizedBox(height: 10),
+                  ],
                   Row(children: [
                     const Text('PROGRESSION', style: TextStyle(color: muted, fontSize: 9, letterSpacing: 1)),
                     const Spacer(),
