@@ -1,7 +1,7 @@
 name: route_optimizer
-description: Route Optimizer - prototype Android de navigation.
+description: Route Optimizer - Application GPS Tactique Autonome.
 publish_to: 'none'
-version: 0.1.0+1
+version: 0.2.0+1
 
 environment:
   sdk: '>=3.4.0 <4.0.0'
@@ -14,6 +14,7 @@ dependencies:
   geolocator: ^14.0.2
   flutter_compass: ^0.8.1
   http: ^1.4.0
+  provider: ^6.1.2 # Nécessaire pour séparer l'Esprit (Software) de l'Interface
 
 dev_dependencies:
   flutter_test:
